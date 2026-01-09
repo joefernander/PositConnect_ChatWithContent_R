@@ -336,6 +336,9 @@ server <- function(input, output, session) {
     req(input$iframe_content)
     req(chat())
 
+    # Clear the chat UI for new content
+    chat_clear("chat", session = session)
+
     # Convert HTML to markdown using pandoc
     markdown <- tryCatch({
       tmp_html <- tempfile(fileext = ".html")
@@ -368,21 +371,35 @@ server <- function(input, output, session) {
 
     current_markdown(markdown)
 
-    # Reset chat and send context to LLM
-    chat_obj <- chat()
+    # Reinitialize chat with fresh context
+    # Create a new chat instance to reset conversation history
+    if (nchar(Sys.getenv("ANTHROPIC_API_KEY")) > 0) {
+      new_chat <- chat_anthropic(system_prompt = system_prompt)
+    } else if (nchar(Sys.getenv("OPENAI_API_KEY")) > 0) {
+      new_chat <- chat_openai(system_prompt = system_prompt)
+    } else if (nchar(Sys.getenv("GOOGLE_API_KEY")) > 0) {
+      new_chat <- chat_google(system_prompt = system_prompt)
+    } else {
+      new_chat <- NULL
+    }
 
-    # Create a new chat instance with fresh context
-    tryCatch({
-      # Send context without echoing
-      invisible(chat_obj$chat(paste0("<context>", markdown, "</context>")))
+    if (!is.null(new_chat)) {
+      chat(new_chat)
+      chat_obj <- chat()
 
-      # Generate summary
-      summary_response <- chat_obj$chat("Write a brief '### Summary' of the content.")
-      chat_append("chat", summary_response, session = session)
-    }, error = function(e) {
-      message("Error processing content: ", e$message)
-      chat_append("chat", "Content loaded. Please ask me questions about it!", session = session)
-    })
+      # Send context and generate summary
+      tryCatch({
+        # Send context without echoing
+        invisible(chat_obj$chat(paste0("<context>", markdown, "</context>")))
+
+        # Generate summary
+        summary_response <- chat_obj$chat("Write a brief '### Summary' of the content.")
+        chat_append("chat", summary_response, session = session)
+      }, error = function(e) {
+        message("Error processing content: ", e$message)
+        chat_append("chat", "Content loaded. Please ask me questions about it!", session = session)
+      })
+    }
   })
 
   # Handle user messages from chat UI
