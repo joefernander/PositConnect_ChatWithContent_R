@@ -322,9 +322,11 @@ server <- function(input, output, session) {
     })
 
     if (!is.null(content_info)) {
+      content_url <- content_info$get_url()
+      message("Loading content from URL: ", content_url)
       session$sendCustomMessage(
         "update-iframe",
-        list(url = content_info$content_url)
+        list(url = content_url)
       )
     }
   })
