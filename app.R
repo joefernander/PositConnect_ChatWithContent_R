@@ -314,16 +314,17 @@ server <- function(input, output, session) {
     req(input$content_selection, input$content_selection != "")
     req(client)
 
-    content <- tryCatch({
-      content(client, input$content_selection)
+    content_info <- tryCatch({
+      content_item(client, input$content_selection)
     }, error = function(e) {
+      message("Error fetching content: ", e$message)
       NULL
     })
 
-    if (!is.null(content)) {
+    if (!is.null(content_info)) {
       session$sendCustomMessage(
         "update-iframe",
-        list(url = content$content_url)
+        list(url = content_info$content_url)
       )
     }
   })
@@ -358,23 +359,28 @@ server <- function(input, output, session) {
 
       paste(md_content, collapse = "\n")
     }, error = function(e) {
+      message("Error converting HTML to markdown: ", e$message)
       # Fallback: just use the HTML as-is
       input$iframe_content
     })
 
     current_markdown(markdown)
 
-    # Reset chat with new context and send context
+    # Reset chat and send context to LLM
     chat_obj <- chat()
-    chat_obj$reset()
-    chat_obj$chat(
-      paste0("<context>", markdown, "</context>"),
-      echo = "none"
-    )
 
-    # Generate summary and append to chat
-    summary_response <- chat_obj$chat("Write a brief '### Summary' of the content.")
-    chat_append("chat", summary_response)
+    # Create a new chat instance with fresh context
+    tryCatch({
+      # Send context without echoing
+      invisible(chat_obj$chat(paste0("<context>", markdown, "</context>")))
+
+      # Generate summary
+      summary_response <- chat_obj$chat("Write a brief '### Summary' of the content.")
+      chat_append("chat", summary_response, session = session)
+    }, error = function(e) {
+      message("Error processing content: ", e$message)
+      chat_append("chat", "Content loaded. Please ask me questions about it!", session = session)
+    })
   })
 
   # Handle user messages from chat UI
@@ -384,12 +390,17 @@ server <- function(input, output, session) {
 
     user_message <- input$chat_user_input
 
-    # Stream response from chat
-    chat_obj <- chat()
-    response_stream <- chat_obj$stream(user_message)
+    # Get response from chat
+    tryCatch({
+      chat_obj <- chat()
+      response <- chat_obj$stream(user_message)
 
-    # Append streaming response to chat
-    chat_append("chat", response_stream)
+      # Append streaming response to chat
+      chat_append("chat", response, session = session)
+    }, error = function(e) {
+      message("Error in chat: ", e$message)
+      chat_append("chat", "Sorry, I encountered an error. Please try again.", session = session)
+    })
   })
 }
 
