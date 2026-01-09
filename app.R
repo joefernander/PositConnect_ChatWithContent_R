@@ -1,7 +1,8 @@
 library(shiny)
 library(bslib)
 library(connectapi)
-library(elmer)
+library(ellmer)
+library(shinychat)
 library(dplyr)
 library(purrr)
 library(httr)
@@ -127,14 +128,18 @@ setup_ui <- page_fillable(
       h2("LLM API", class = "setup-section-title"),
       div(
         class = "setup-description",
-        HTML("This app requires the <code>ELMER_CHAT_PROVIDER_MODEL</code> environment variable to be
-              set along with an LLM API Key in the content access panel. Please set them in your environment before running the app.
-              See the <a href='https://ellmer.tidyverse.org/reference/chat.html' class='setup-link'>documentation</a> for more details on which arguments can be set for each Elmer provider.")
+        HTML("This app requires an LLM API Key to be set in the content access panel. Please configure one of the supported providers (OpenAI, Anthropic, etc.) before running the app.
+              See the <a href='https://ellmer.tidyverse.org/' class='setup-link'>ellmer documentation</a> for more details on supported providers.")
       ),
       h3("Example for OpenAI API", class = "setup-section-title"),
       pre(
         class = "setup-code-block",
-        "ELMER_CHAT_PROVIDER_MODEL = \"openai/gpt-4o\"\nOPENAI_API_KEY = \"<key>\""
+        "OPENAI_API_KEY = \"<your-key>\""
+      ),
+      h3("Example for Anthropic API", class = "setup-section-title"),
+      pre(
+        class = "setup-code-block",
+        "ANTHROPIC_API_KEY = \"<your-key>\""
       ),
       h2("Connect Visitor API Key", class = "setup-section-title"),
       div(
@@ -216,8 +221,12 @@ server <- function(input, output, session) {
 
   # Check for LLM provider configuration
   has_llm_config <- reactive({
-    !is.null(Sys.getenv("ELMER_CHAT_PROVIDER_MODEL")) &&
-      nchar(Sys.getenv("ELMER_CHAT_PROVIDER_MODEL")) > 0
+    # Check for common LLM provider API keys
+    has_openai <- nchar(Sys.getenv("OPENAI_API_KEY")) > 0
+    has_anthropic <- nchar(Sys.getenv("ANTHROPIC_API_KEY")) > 0
+    has_google <- nchar(Sys.getenv("GOOGLE_API_KEY")) > 0
+
+    has_openai || has_anthropic || has_google
   })
 
   # Determine which UI to show
@@ -250,11 +259,23 @@ server <- function(input, output, session) {
         <br><span class='suggestion submit'>Suggested prompt text</span>
     </important>"
 
-  # Initialize chat object
-  chat <- chat_openai(
-    system_prompt = system_prompt,
-    model = Sys.getenv("ELMER_CHAT_PROVIDER_MODEL", "gpt-4o")
-  )
+  # Initialize chat object based on available provider
+  chat <- reactiveVal(NULL)
+
+  observe({
+    if (has_llm_config()) {
+      chat_obj <- if (nchar(Sys.getenv("ANTHROPIC_API_KEY")) > 0) {
+        chat_anthropic(system_prompt = system_prompt)
+      } else if (nchar(Sys.getenv("OPENAI_API_KEY")) > 0) {
+        chat_openai(system_prompt = system_prompt)
+      } else if (nchar(Sys.getenv("GOOGLE_API_KEY")) > 0) {
+        chat_google(system_prompt = system_prompt)
+      } else {
+        NULL
+      }
+      chat(chat_obj)
+    }
+  })
 
   # Populate content selector
   observe({
@@ -310,6 +331,7 @@ server <- function(input, output, session) {
   # Process iframe content when it changes
   observeEvent(input$iframe_content, {
     req(input$iframe_content)
+    req(chat())
 
     # Convert HTML to markdown using pandoc
     markdown <- tryCatch({
@@ -342,26 +364,32 @@ server <- function(input, output, session) {
 
     current_markdown(markdown)
 
-    # Reset chat with new context
-    chat$reset()
-    chat$chat(
+    # Reset chat with new context and send context
+    chat_obj <- chat()
+    chat_obj$reset()
+    chat_obj$chat(
       paste0("<context>", markdown, "</context>"),
       echo = "none"
     )
 
-    # Generate summary
-    response <- chat$stream("Write a brief '### Summary' of the content.")
-
-    # Send summary to chat UI
-    chat_append("chat", response)
+    # Generate summary and append to chat
+    summary_response <- chat_obj$chat("Write a brief '### Summary' of the content.")
+    chat_append("chat", summary_response)
   })
 
-  # Handle chat messages
-  observe({
-    chat_on_user_submit("chat", function(user_input) {
-      response <- chat$stream(user_input)
-      chat_append("chat", response)
-    })
+  # Handle user messages from chat UI
+  observeEvent(input$chat_user_input, {
+    req(input$chat_user_input)
+    req(chat())
+
+    user_message <- input$chat_user_input
+
+    # Stream response from chat
+    chat_obj <- chat()
+    response_stream <- chat_obj$stream(user_message)
+
+    # Append streaming response to chat
+    chat_append("chat", response_stream)
   })
 }
 
